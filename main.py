@@ -1,68 +1,41 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List, Optional
+import requests
 import os
-import openai
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
 
 app = FastAPI()
 
-# --- Pydantic models ---
-class Image(BaseModel):
-    filename: Optional[str] = None
-    name: Optional[str] = None
-    url: Optional[str] = None
-    
-    def get_filename(self):
-        return self.filename or self.name
-
-class FNOLRequest(BaseModel):
+class Claim(BaseModel):
     incident_type: str
-    date: str
+    incident_date: str
     location: str
-    severity: str
-    third_party: str
-    injuries: str
     description: str
-    images: Optional[List[Image]] = []  # Expect a list
+    third_party: bool
+    injuries: bool
+    severity: str
+    images: list
 
-# --- API endpoint ---
-@app.post("/fnol")
-async def analyze_fnol(data: FNOLRequest):
+@app.post("/submit_claim")
+def submit_claim(claim: Claim):
+
+    # Send to Make.com and WAIT for response
+    make_response = requests.post(
+        MAKE_WEBHOOK_URL,
+        json=claim.dict(),
+        timeout=120  # give Make enough time
+    )
+
+    # Parse response
     try:
-        # Build OpenAI prompt
-        prompt = f"""
-You are an insurance assistant AI.
+        result = make_response.json()
+    except:
+        result = {"recommendations": None}
 
-You receive FNOL data with fields:
-- Date: {data.date}
-- Location: {data.location}
-- Description: {data.description}
-- Number of images: {len(data.images)}
-
-Task:
-1. Analyze the claim and provide clear recommendations for the user on the next steps (e.g., contact police, take photos, contact insurance).
-2. Ignore actual image content, just note how many images were received.
-3. Return a concise text message to show the user.
-
-Return only plain text suitable for displaying to the user.
-"""
-
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=300
-        )
-
-        recommendation_text = response.choices[0].message.content
-
-        # Return the summary along with original data
-        return {
-            "original_data": data.dict(),
-            "recommendation": recommendation_text
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # Return the recommendations back to Gradio
+    return {
+        "status": make_response.status_code,
+        "recommendations": result.get("recommendations", "No recommendation"),
+        "processed_data": result
+    }
