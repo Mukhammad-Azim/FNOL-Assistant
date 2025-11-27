@@ -1,41 +1,67 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import requests
+from typing import List, Optional
 import os
+import openai
 
-MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
+# --- Configure OpenAI API ---
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
-class Claim(BaseModel):
+# --- Pydantic model matching Gradio payload ---
+class Image(BaseModel):
+    filename: Optional[str] = None
+    content: Optional[str] = None  # base64 string
+
+class FNOLRequest(BaseModel):
     incident_type: str
-    incident_date: str
+    date: str
     location: str
-    description: str
-    third_party: bool
-    injuries: bool
     severity: str
-    images: list
+    third_party: str      # "Yes"/"No"
+    injuries: str         # "Yes"/"No"
+    description: str
+    images: Optional[List[Image]] = []
 
-@app.post("/submit_claim")
-def submit_claim(claim: Claim):
-
-    # Send to Make.com and WAIT for response
-    make_response = requests.post(
-        MAKE_WEBHOOK_URL,
-        json=claim.dict(),
-        timeout=120  # give Make enough time
-    )
-
-    # Parse response
+# --- Endpoint to handle FNOL and generate AI recommendation ---
+@app.post("/fnol")
+def analyze_fnol(data: FNOLRequest):
     try:
-        result = make_response.json()
-    except:
-        result = {"recommendations": None}
+        # Build prompt for OpenAI
+        prompt = f"""
+You are an insurance assistant AI.
 
-    # Return the recommendations back to Gradio
-    return {
-        "status": make_response.status_code,
-        "recommendations": result.get("recommendations", "No recommendation"),
-        "processed_data": result
-    }
+You receive FNOL data with fields:
+- Date: {data.date}
+- Location: {data.location}
+- Description: {data.description}
+- Number of images: {len(data.images)}
+
+Task:
+1. Analyze the claim and provide clear recommendations for the user on the next steps 
+   (e.g., contact police, take photos, contact insurance).
+2. Ignore actual image content, just note how many images were received.
+3. Return a concise text message to show the user.
+
+Return only plain text suitable for displaying to the user.
+"""
+
+        # --- Call OpenAI synchronously ---
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300
+        )
+
+        recommendation_text = response.choices[0].message.content.strip()
+
+        # --- Return recommendation and original data ---
+        return {
+            "recommendation": recommendation_text,
+            "original_data": data.dict()
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
