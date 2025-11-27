@@ -10,8 +10,12 @@ app = FastAPI()
 
 # --- Pydantic models ---
 class Image(BaseModel):
-    filename: str
-    url: Optional[str] = None  # We only need the URL from Make.com
+    filename: Optional[str] = None
+    name: Optional[str] = None
+    url: Optional[str] = None
+    
+    def get_filename(self):
+        return self.filename or self.name
 
 class FNOLRequest(BaseModel):
     incident_type: str
