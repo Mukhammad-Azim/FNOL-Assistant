@@ -3,75 +3,61 @@ from pydantic import BaseModel
 from typing import List, Optional
 import os
 import openai
-from fastapi.middleware.cors import CORSMiddleware
 
-# Initialize OpenAI with your environment variable
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
-# Allow CORS so Make.com can call this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # For production, restrict to your domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Pydantic models for validation ---
+# --- Pydantic models ---
 class Image(BaseModel):
     filename: str
-    url: Optional[str] = None
+    url: Optional[str] = None  # We only need the URL from Make.com
 
 class FNOLRequest(BaseModel):
+    incident_type: str
     date: str
     location: str
+    severity: str
+    third_party: str
+    injuries: str
     description: str
-    images: Optional[List[Image]] = []
+    images: Optional[List[Image]] = []  # Expect a list
 
 # --- API endpoint ---
 @app.post("/fnol")
 async def analyze_fnol(data: FNOLRequest):
     try:
-        # Create prompt for OpenAI
+        # Build OpenAI prompt
         prompt = f"""
-You are analyzing an insurance claim with the following fields:
-- date: {data.date}
-- location: {data.location}
-- description: {data.description}
-- images: {data.images}
+You are an insurance assistant AI.
 
-Please generate ONLY valid JSON with the following fields:
-{{
-    "date_normalized": "dd.mm.yyyy",
-    "location_normalized": {{
-        "street": "",
-        "street_number": "",
-        "city": "",
-        "postal_code": "",
-        "country": ""
-    }},
-    "risk_category": "",
-    "estimated_damage_severity": "",
-    "injury_assessment": "",
-    "liability_estimate": "",
-    "recommendations": ""
-}}
+You receive FNOL data with fields:
+- Date: {data.date}
+- Location: {data.location}
+- Description: {data.description}
+- Number of images: {len(data.images)}
+
+Task:
+1. Analyze the claim and provide clear recommendations for the user on the next steps (e.g., contact police, take photos, contact insurance).
+2. Ignore actual image content, just note how many images were received.
+3. Return a concise text message to show the user.
+
+Return only plain text suitable for displaying to the user.
 """
 
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=500
+            temperature=0.3,
+            max_tokens=300
         )
 
-        fnol_summary = response.choices[0].message.content
+        recommendation_text = response.choices[0].message.content
 
+        # Return the summary along with original data
         return {
             "original_data": data.dict(),
-            "fnol_summary": fnol_summary
+            "recommendation": recommendation_text
         }
 
     except Exception as e:
